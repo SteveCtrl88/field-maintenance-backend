@@ -14,6 +14,9 @@ const { errorHandler, notFound } = require('./src/middleware/errorHandler');
 // Import routes
 const authRoutes = require('./src/routes/auth');
 const userRoutes = require('./src/routes/users');
+const customerRoutes = require('./src/routes/customers');
+const robotRoutes = require('./src/routes/robots');
+const seedRoutes = require('./src/routes/seed');
 
 // Create Express app
 const app = express();
@@ -28,10 +31,11 @@ app.use(helmet({
 
 // CORS configuration
 app.use(cors({
-  origin: process.env.CORS_ORIGIN === '*' ? true : process.env.CORS_ORIGIN?.split(','),
+  origin: true, // Allow all origins
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 200 // For legacy browser support
 }));
 
 // Rate limiting
@@ -79,6 +83,9 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
+app.use('/api/v1/customers', customerRoutes);
+app.use('/api/v1/robots', robotRoutes);
+app.use('/api/seed', seedRoutes);
 
 // Welcome route
 app.get('/', (req, res) => {
@@ -90,6 +97,8 @@ app.get('/', (req, res) => {
     endpoints: {
       auth: '/api/v1/auth',
       users: '/api/v1/users',
+      customers: '/api/v1/customers',
+      robots: '/api/v1/robots',
       health: '/health'
     }
   });

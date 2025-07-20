@@ -1,46 +1,87 @@
 const User = require('../models/User');
-const JWTUtil = require('../utils/jwt');
+const { generateTokens, verifyRefreshToken } = require('../utils/jwt');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
-const { blacklistToken } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
+// @desc    Register new user
+// @route   POST /api/auth/register
+// @access  Public
+const register = asyncHandler(async (req, res) => {
+  const { name, email, password, role = 'technician' } = req.body;
+
+  // Check if user already exists
+  const existingUser = await User.findOne({ email: email.toLowerCase() });
+  if (existingUser) {
+    throw new AppError('User already exists with this email', 400, 'USER_EXISTS');
+  }
+
+  // Create user with passwordHash field
+  const user = new User({
+    name,
+    email: email.toLowerCase(),
+    passwordHash: password, // This will be hashed by the pre-save hook
+    role,
+    isActive: true
+  });
+
+  await user.save();
+
+  // Generate tokens
+  const { accessToken, refreshToken } = generateTokens(user._id);
+  
+  // Add refresh token to user
+  await user.addRefreshToken(refreshToken);
+
+  logger.info('User registered successfully', { userId: user._id, email: user.email });
+
+  res.status(201).json({
+    success: true,
+    message: 'User registered successfully',
+    data: {
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isActive: user.isActive,
+        createdAt: user.createdAt
+      },
+      tokens: {
+        accessToken,
+        refreshToken
+      }
+    }
+  });
+});
+
 // @desc    Login user
-// @route   POST /api/v1/auth/login
+// @route   POST /api/auth/login
 // @access  Public
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
-  // Check if user exists
-  const user = await User.findOne({ email }).select('+passwordHash');
-  
+  // Find user by email
+  const user = await User.findOne({ 
+    email: email.toLowerCase(),
+    isActive: true 
+  });
+
   if (!user) {
     throw new AppError('Invalid credentials', 401, 'INVALID_CREDENTIALS');
   }
 
-  // Check if user is active
-  if (!user.isActive) {
-    throw new AppError('Account is deactivated', 401, 'ACCOUNT_DEACTIVATED');
-  }
-
   // Check password
   const isPasswordValid = await user.comparePassword(password);
-  
   if (!isPasswordValid) {
     throw new AppError('Invalid credentials', 401, 'INVALID_CREDENTIALS');
   }
 
   // Generate tokens
-  const payload = JWTUtil.createPayload(user);
-  const { accessToken, refreshToken } = JWTUtil.generateTokens(payload);
-
-  // Save refresh token to user
-  await user.addRefreshToken(refreshToken);
+  const { accessToken, refreshToken } = generateTokens(user._id);
   
-  // Update last login
+  // Add refresh token to user and update last login
+  await user.addRefreshToken(refreshToken);
   await user.updateLastLogin();
-
-  // Remove sensitive data from response
-  const userResponse = user.toJSON();
 
   logger.info('User logged in successfully', { userId: user._id, email: user.email });
 
@@ -48,53 +89,46 @@ const login = asyncHandler(async (req, res) => {
     success: true,
     message: 'Login successful',
     data: {
-      user: userResponse,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isActive: user.isActive,
+        lastLogin: user.lastLogin
+      },
       tokens: {
         accessToken,
-        refreshToken,
-        expiresIn: process.env.JWT_EXPIRE || '15m'
+        refreshToken
       }
     }
   });
 });
 
 // @desc    Refresh access token
-// @route   POST /api/v1/auth/refresh
+// @route   POST /api/auth/refresh
 // @access  Public
-const refresh = asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body;
+const refreshToken = asyncHandler(async (req, res) => {
+  const { refreshToken: token } = req.body;
 
-  if (!refreshToken) {
-    throw new AppError('Refresh token required', 400, 'REFRESH_TOKEN_REQUIRED');
+  if (!token) {
+    throw new AppError('Refresh token is required', 400, 'MISSING_REFRESH_TOKEN');
   }
 
   // Verify refresh token
-  const decoded = JWTUtil.verifyRefreshToken(refreshToken);
-
+  const decoded = verifyRefreshToken(token);
+  
   // Find user and check if refresh token exists
   const user = await User.findById(decoded.userId);
-  
-  if (!user) {
-    throw new AppError('User not found', 404, 'USER_NOT_FOUND');
-  }
-
-  if (!user.isActive) {
-    throw new AppError('Account is deactivated', 401, 'ACCOUNT_DEACTIVATED');
-  }
-
-  // Check if refresh token exists in user's tokens
-  const tokenExists = user.refreshTokens.some(rt => rt.token === refreshToken);
-  
-  if (!tokenExists) {
+  if (!user || !user.refreshTokens.some(rt => rt.token === token)) {
     throw new AppError('Invalid refresh token', 401, 'INVALID_REFRESH_TOKEN');
   }
 
   // Generate new tokens
-  const payload = JWTUtil.createPayload(user);
-  const { accessToken, refreshToken: newRefreshToken } = JWTUtil.generateTokens(payload);
-
+  const { accessToken, refreshToken: newRefreshToken } = generateTokens(user._id);
+  
   // Remove old refresh token and add new one
-  await user.removeRefreshToken(refreshToken);
+  await user.removeRefreshToken(token);
   await user.addRefreshToken(newRefreshToken);
 
   logger.info('Token refreshed successfully', { userId: user._id });
@@ -105,31 +139,28 @@ const refresh = asyncHandler(async (req, res) => {
     data: {
       tokens: {
         accessToken,
-        refreshToken: newRefreshToken,
-        expiresIn: process.env.JWT_EXPIRE || '15m'
+        refreshToken: newRefreshToken
       }
     }
   });
 });
 
 // @desc    Logout user
-// @route   POST /api/v1/auth/logout
+// @route   POST /api/auth/logout
 // @access  Private
 const logout = asyncHandler(async (req, res) => {
-  const { refreshToken } = req.body;
-  const accessToken = req.token;
+  const { refreshToken: token } = req.body;
+  const userId = req.user.id;
 
-  // Blacklist access token
-  if (accessToken) {
-    blacklistToken(accessToken);
+  if (token) {
+    // Remove specific refresh token
+    const user = await User.findById(userId);
+    if (user) {
+      await user.removeRefreshToken(token);
+    }
   }
 
-  // Remove refresh token from user if provided
-  if (refreshToken && req.user) {
-    await req.user.removeRefreshToken(refreshToken);
-  }
-
-  logger.info('User logged out successfully', { userId: req.user?._id });
+  logger.info('User logged out successfully', { userId });
 
   res.status(200).json({
     success: true,
@@ -138,21 +169,19 @@ const logout = asyncHandler(async (req, res) => {
 });
 
 // @desc    Logout from all devices
-// @route   POST /api/v1/auth/logout-all
+// @route   POST /api/auth/logout-all
 // @access  Private
 const logoutAll = asyncHandler(async (req, res) => {
-  const accessToken = req.token;
+  const userId = req.user.id;
 
-  // Blacklist current access token
-  if (accessToken) {
-    blacklistToken(accessToken);
+  // Remove all refresh tokens
+  const user = await User.findById(userId);
+  if (user) {
+    user.refreshTokens = [];
+    await user.save();
   }
 
-  // Clear all refresh tokens
-  req.user.refreshTokens = [];
-  await req.user.save();
-
-  logger.info('User logged out from all devices', { userId: req.user._id });
+  logger.info('User logged out from all devices', { userId });
 
   res.status(200).json({
     success: true,
@@ -161,99 +190,37 @@ const logoutAll = asyncHandler(async (req, res) => {
 });
 
 // @desc    Get current user profile
-// @route   GET /api/v1/auth/me
+// @route   GET /api/auth/me
 // @access  Private
 const getMe = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user.id);
+
   res.status(200).json({
     success: true,
+    message: 'User profile retrieved successfully',
     data: {
-      user: req.user
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isActive: user.isActive,
+        profile: user.profile,
+        lastLogin: user.lastLogin,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }
     }
-  });
-});
-
-// @desc    Update current user profile
-// @route   PUT /api/v1/auth/me
-// @access  Private
-const updateMe = asyncHandler(async (req, res) => {
-  const allowedFields = ['name', 'profile'];
-  const updates = {};
-
-  // Only allow specific fields to be updated
-  allowedFields.forEach(field => {
-    if (req.body[field] !== undefined) {
-      updates[field] = req.body[field];
-    }
-  });
-
-  if (Object.keys(updates).length === 0) {
-    throw new AppError('No valid fields to update', 400, 'NO_UPDATES');
-  }
-
-  const user = await User.findByIdAndUpdate(
-    req.user._id,
-    updates,
-    { new: true, runValidators: true }
-  );
-
-  logger.info('User profile updated', { userId: user._id });
-
-  res.status(200).json({
-    success: true,
-    message: 'Profile updated successfully',
-    data: {
-      user
-    }
-  });
-});
-
-// @desc    Change password
-// @route   PUT /api/v1/auth/change-password
-// @access  Private
-const changePassword = asyncHandler(async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
-
-  if (!currentPassword || !newPassword) {
-    throw new AppError('Current password and new password are required', 400, 'MISSING_PASSWORDS');
-  }
-
-  if (newPassword.length < 6) {
-    throw new AppError('New password must be at least 6 characters long', 400, 'PASSWORD_TOO_SHORT');
-  }
-
-  // Get user with password
-  const user = await User.findById(req.user._id).select('+passwordHash');
-
-  // Check current password
-  const isCurrentPasswordValid = await user.comparePassword(currentPassword);
-  
-  if (!isCurrentPasswordValid) {
-    throw new AppError('Current password is incorrect', 400, 'INCORRECT_PASSWORD');
-  }
-
-  // Update password
-  user.passwordHash = newPassword;
-  await user.save();
-
-  // Clear all refresh tokens (force re-login on all devices)
-  user.refreshTokens = [];
-  await user.save();
-
-  logger.info('Password changed successfully', { userId: user._id });
-
-  res.status(200).json({
-    success: true,
-    message: 'Password changed successfully. Please login again.'
   });
 });
 
 module.exports = {
+  register,
   login,
-  refresh,
+  refreshToken,
   logout,
   logoutAll,
-  getMe,
-  updateMe,
-  changePassword
+  getMe
 };
+
 

@@ -240,8 +240,32 @@ const schemas = {
   objectId: Joi.string().hex().length(24).required()
 };
 
+// Validation middleware functions
+const validateUser = validate(schemas.userCreate);
+const validateUserUpdate = validate(schemas.userUpdate);
+const validateUserLogin = validate(schemas.userLogin);
+const validateCustomer = validate(schemas.customerCreate);
+const validateCustomerUpdate = validate(schemas.customerUpdate);
+const validateRobot = validate(schemas.robotCreate);
+const validateRobotUpdate = validate(schemas.robotUpdate);
+const validateInspection = validate(schemas.inspectionCreate);
+const validateInspectionUpdate = validate(schemas.inspectionUpdate);
+const validateObjectId = validate(schemas.objectId, 'params');
+const validateQuery = validate(schemas.queryParams, 'query');
+
 module.exports = {
   validate,
-  schemas
+  schemas,
+  validateUser,
+  validateUserUpdate,
+  validateUserLogin,
+  validateCustomer,
+  validateCustomerUpdate,
+  validateRobot,
+  validateRobotUpdate,
+  validateInspection,
+  validateInspectionUpdate,
+  validateObjectId,
+  validateQuery
 };
 
