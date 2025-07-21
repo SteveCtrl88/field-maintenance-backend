@@ -16,6 +16,8 @@ const authRoutes = require('./src/routes/auth');
 const userRoutes = require('./src/routes/users');
 const customerRoutes = require('./src/routes/customers');
 const robotRoutes = require('./src/routes/robots');
+const robotTypeRoutes = require('./src/routes/robotTypes');
+const inspectionRoutes = require('./src/routes/inspections');
 const seedRoutes = require('./src/routes/seed');
 
 // Create Express app
@@ -85,6 +87,8 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/customers', customerRoutes);
 app.use('/api/v1/robots', robotRoutes);
+app.use('/api/v1/robot-types', robotTypeRoutes);
+app.use('/api/v1/inspections', inspectionRoutes);
 app.use('/api/seed', seedRoutes);
 
 // Welcome route
